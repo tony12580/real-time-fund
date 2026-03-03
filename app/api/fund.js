@@ -307,7 +307,7 @@ export const fetchFundData = async (c) => {
       const holdingsPromise = new Promise((resolveH) => {
         (async () => {
           try {
-            const pz = await fetchFundPingzhongdata(c, { cacheTime: 10 * 60 * 1000 });
+            const pz = await fetchFundPingzhongdata(c);
             const rawCodes = Array.isArray(pz?.stockCodes) ? pz.stockCodes : [];
             const codes = rawCodes
               .map((code) => String(code).slice(0, 6))
@@ -624,7 +624,7 @@ const fetchAndParsePingzhongdata = async (fundCode) => {
  * 获取并解析「基金走势图/资产等」数据（pingzhongdata）
  * 来源：https://fund.eastmoney.com/pingzhongdata/${fundCode}.js
  */
-export const fetchFundPingzhongdata = async (fundCode, { cacheTime = 10 * 60 * 1000 } = {}) => {
+export const fetchFundPingzhongdata = async (fundCode, { cacheTime = 60 * 60 * 1000 } = {}) => {
   if (!fundCode) throw new Error('fundCode 不能为空');
   if (typeof window === 'undefined' || typeof document === 'undefined') {
     throw new Error('无浏览器环境');
@@ -728,7 +728,7 @@ export const fetchFundHistory = async (code, range = '1m') => {
 
   // 业绩走势统一走 pingzhongdata.Data_netWorthTrend
   try {
-    const pz = await fetchFundPingzhongdata(code, { cacheTime: 10 * 60 * 1000 });
+    const pz = await fetchFundPingzhongdata(code);
     const trend = pz?.Data_netWorthTrend;
     if (Array.isArray(trend) && trend.length) {
       const startMs = start.startOf('day').valueOf();
