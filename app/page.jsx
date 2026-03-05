@@ -45,7 +45,7 @@ import githubImg from "./assets/github.svg";
 import { supabase, isSupabaseConfigured } from './lib/supabase';
 import { recordValuation, getAllValuationSeries, clearFund } from './lib/valuationTimeseries';
 import { loadHolidaysForYears, isTradingDay as isDateTradingDay } from './lib/tradingCalendar';
-import { fetchFundData, fetchLatestRelease, fetchShanghaiIndexDate, fetchSmartFundNetValue, searchFunds, extractFundNamesWithLLM } from './api/fund';
+import { parseFundTextWithLLM, fetchFundData, fetchLatestRelease, fetchShanghaiIndexDate, fetchSmartFundNetValue, searchFunds } from './api/fund';
 import packageJson from '../package.json';
 import PcFundTable from './components/PcFundTable';
 import MobileFundTable from './components/MobileFundTable';
@@ -1171,6 +1171,7 @@ export default function HomePage() {
   const [isScanImporting, setIsScanImporting] = useState(false);
   const [scanImportProgress, setScanImportProgress] = useState({ current: 0, total: 0, success: 0, failed: 0 });
   const [scanProgress, setScanProgress] = useState({ stage: 'ocr', current: 0, total: 0 }); // stage: ocr | verify
+  const [isOcrScan, setIsOcrScan] = useState(false); // 是否为拍照/图片识别触发的弹框
   const abortScanRef = useRef(false); // 终止扫描标记
   const fileInputRef = useRef(null);
   const ocrWorkerRef = useRef(null);
@@ -1211,6 +1212,7 @@ export default function HomePage() {
       let worker = ocrWorkerRef.current;
       if (!worker) {
         const cdnBases = [
+          'https://01kjzb6fhx9f8rjstc8c21qadx.esa.staticdn.net/npm',
           'https://fastly.jsdelivr.net/npm',
           'https://cdn.jsdelivr.net/npm',
         ];
@@ -1264,8 +1266,9 @@ export default function HomePage() {
         }
       };
 
-      const allCodes = new Set();
-      const allNames = new Set();
+      const allFundsData = []; // 存储所有解析出的基金信息，格式为 [{fundCode, fundName, holdAmounts, holdGains}]
+      const addedFundCodes = new Set(); // 用于去重
+
       for (let i = 0; i < files.length; i++) {
         if (abortScanRef.current) break;
 
@@ -1289,52 +1292,69 @@ export default function HomePage() {
           }
           text = '';
         }
-        const matches = text.match(/\b\d{6}\b/g) || [];
-        matches.forEach(c => allCodes.add(c));
+        // 提取到 text 内容，调用大模型 api 进行解析，获取基金数据(fundCode 可能为空)
+        const fundsResString = await parseFundTextWithLLM(text);
+        let fundsRes = null; // 格式为 [{"fundCode": "000001", "fundName": "浙商债券","holdAmounts": "99.99", "holdGains": "99.99"}]
+        try {
+          fundsRes = JSON.parse(fundsResString);
+        } catch (e) {
+          console.error(e);
+        }
 
-        // 如果当前图片中没有识别出基金编码，尝试从文本中提取可能的中文基金名称（调用 GLM 接口）
-        if (!matches.length && text) {
-          let parsedNames = [];
-          try {
-            parsedNames = await extractFundNamesWithLLM(text);
-          } catch (e) {
-            parsedNames = [];
-          }
-          parsedNames.forEach((name) => {
-            if (isString(name)) {
-              allNames.add(name.trim());
+        // 处理大模型解析结果，根据 fundCode 去重
+        if (Array.isArray(fundsRes) && fundsRes.length > 0) {
+          fundsRes.forEach((fund) => {
+            const code = fund.fundCode || '';
+            const name = (fund.fundName || '').trim();
+            if (code && !addedFundCodes.has(code)) {
+              addedFundCodes.add(code);
+              allFundsData.push({
+                fundCode: code,
+                fundName: name,
+                holdAmounts: fund.holdAmounts || '',
+                holdGains: fund.holdGains || ''
+              });
+            } else if (!code && name) {
+              // fundCode 为空但有名称，后续需要通过名称搜索基金代码
+              allFundsData.push({
+                fundCode: '',
+                fundName: name,
+                holdAmounts: fund.holdAmounts || '',
+                holdGains: fund.holdGains || ''
+              });
             }
           });
         }
       }
 
       if (abortScanRef.current) {
-        // 如果是手动终止，不显示结果弹窗
         return;
       }
 
-      // 如果所有截图中都没有识别出基金编码，尝试使用识别到的中文名称去搜索基金
-      if (allCodes.size === 0 && allNames.size > 0) {
-        const names = Array.from(allNames);
-        setScanProgress({ stage: 'verify', current: 0, total: names.length });
-        for (let i = 0; i < names.length; i++) {
+      // 处理没有基金代码但有名称的情况，通过名称搜索基金代码
+      const fundsWithoutCode = allFundsData.filter(f => !f.fundCode && f.fundName);
+      if (fundsWithoutCode.length > 0) {
+        setScanProgress({ stage: 'verify', current: 0, total: fundsWithoutCode.length });
+        for (let i = 0; i < fundsWithoutCode.length; i++) {
           if (abortScanRef.current) break;
-          const name = names[i];
+          const fundItem = fundsWithoutCode[i];
           setScanProgress(prev => ({ ...prev, current: i + 1 }));
           try {
-            const list = await searchFundsWithTimeout(name, 8000);
+            const list = await searchFundsWithTimeout(fundItem.fundName, 8000);
             // 只有当搜索结果「有且仅有一条」时，才认为名称匹配是唯一且有效的
             if (Array.isArray(list) && list.length === 1) {
               const found = list[0];
-              if (found && found.CODE) {
-                allCodes.add(found.CODE);
+              if (found && found.CODE && !addedFundCodes.has(found.CODE)) {
+                addedFundCodes.add(found.CODE);
+                fundItem.fundCode = found.CODE;
               }
             } else {
               // 使用 fuse.js 读取 Public 中的 allFunds 数据进行模糊匹配，补充搜索接口的不足
               try {
-                const fuzzyCode = await resolveFundCodeByFuzzy(name);
-                if (fuzzyCode) {
-                  allCodes.add(fuzzyCode);
+                const fuzzyCode = await resolveFundCodeByFuzzy(fundItem.fundName);
+                if (fuzzyCode && !addedFundCodes.has(fuzzyCode)) {
+                  addedFundCodes.add(fuzzyCode);
+                  fundItem.fundCode = fuzzyCode;
                 }
               } catch (e) {
               }
@@ -1344,7 +1364,9 @@ export default function HomePage() {
         }
       }
 
-      const codes = Array.from(allCodes).sort();
+      // 过滤出有基金代码的记录
+      const validFunds = allFundsData.filter(f => f.fundCode);
+      const codes = validFunds.map(f => f.fundCode).sort();
       setScanProgress({ stage: 'verify', current: 0, total: codes.length });
 
       const existingCodes = new Set(funds.map(f => f.code));
@@ -1352,6 +1374,7 @@ export default function HomePage() {
       for (let i = 0; i < codes.length; i++) {
         if (abortScanRef.current) break;
         const code = codes[i];
+        const fundInfo = validFunds.find(f => f.fundCode === code);
         setScanProgress(prev => ({ ...prev, current: i + 1 }));
 
         let found = null;
@@ -1366,8 +1389,10 @@ export default function HomePage() {
         const ok = !!found && !alreadyAdded;
         results.push({
           code,
-          name: found ? (found.NAME || found.SHORTNAME || '') : '',
-          status: alreadyAdded ? 'added' : (ok ? 'ok' : 'invalid')
+          name: found ? (found.NAME || found.SHORTNAME || '') : (fundInfo?.fundName || ''),
+          status: alreadyAdded ? 'added' : (ok ? 'ok' : 'invalid'),
+          holdAmounts: fundInfo?.holdAmounts || '',
+          holdGains: fundInfo?.holdGains || ''
         });
       }
 
@@ -1377,6 +1402,7 @@ export default function HomePage() {
 
       setScannedFunds(results);
       setSelectedScannedCodes(new Set(results.filter(r => r.status === 'ok').map(r => r.code)));
+      setIsOcrScan(true);
       setScanConfirmModalOpen(true);
     } catch (err) {
       if (!abortScanRef.current) {
@@ -1417,8 +1443,15 @@ export default function HomePage() {
     setIsScanImporting(true);
     setScanImportProgress({ current: 0, total: codes.length, success: 0, failed: 0 });
 
+    const parseAmount = (val) => {
+      if (!val) return null;
+      const num = parseFloat(String(val).replace(/,/g, ''));
+      return isNaN(num) ? null : num;
+    };
+
     try {
       const newFunds = [];
+      const newHoldings = {};
       let successCount = 0;
       let failedCount = 0;
 
@@ -1430,6 +1463,23 @@ export default function HomePage() {
         try {
           const data = await fetchFundData(code);
           newFunds.push(data);
+
+          const scannedFund = scannedFunds.find(f => f.code === code);
+          const holdAmounts = parseAmount(scannedFund?.holdAmounts);
+          const holdGains = parseAmount(scannedFund?.holdGains);
+          const dwjz = data?.dwjz || data?.gsz || 0;
+
+          if (holdAmounts !== null && dwjz > 0) {
+            const share = holdAmounts / dwjz;
+            const profit = holdGains !== null ? holdGains : 0;
+            const principal = holdAmounts - profit;
+            const cost = share > 0 ? principal / share : 0;
+            newHoldings[code] = {
+              share: Number(share.toFixed(2)),
+              cost: Number(cost.toFixed(4))
+            };
+          }
+
           successCount++;
           setScanImportProgress(prev => ({ ...prev, success: prev.success + 1 }));
         } catch (e) {
@@ -1444,6 +1494,15 @@ export default function HomePage() {
           storageHelper.setItem('funds', JSON.stringify(updated));
           return updated;
         });
+
+        if (Object.keys(newHoldings).length > 0) {
+          setHoldings(prev => {
+            const next = { ...prev, ...newHoldings };
+            storageHelper.setItem('holdings', JSON.stringify(next));
+            return next;
+          });
+        }
+
         const nextSeries = {};
         newFunds.forEach(u => {
           if (u?.code != null && !u.noValuation && Number.isFinite(Number(u.gsz))) {
@@ -2576,6 +2635,7 @@ export default function HomePage() {
     }
     setScannedFunds(fundsToConfirm);
     setSelectedScannedCodes(new Set(pendingCodes));
+    setIsOcrScan(false);
     setScanConfirmModalOpen(true);
     setSearchTerm('');
     setSelectedFunds([]);
@@ -4737,6 +4797,7 @@ export default function HomePage() {
             onConfirm={confirmScanImport}
             refreshing={refreshing}
             groups={groups}
+            isOcrScan={isOcrScan}
           />
         )}
       </AnimatePresence>

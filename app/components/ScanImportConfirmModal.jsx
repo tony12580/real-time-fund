@@ -11,12 +11,20 @@ export default function ScanImportConfirmModal({
   onToggle,
   onConfirm,
   refreshing,
-  groups = []
+  groups = [],
+  isOcrScan = false
 }) {
   const [selectedGroupId, setSelectedGroupId] = useState('all');
 
   const handleConfirm = () => {
     onConfirm(selectedGroupId);
+  };
+
+  const formatAmount = (val) => {
+    if (!val) return null;
+    const num = parseFloat(String(val).replace(/,/g, ''));
+    if (isNaN(num)) return null;
+    return num;
   };
 
   return (
@@ -36,7 +44,7 @@ export default function ScanImportConfirmModal({
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
         className="glass card modal"
         onClick={(e) => e.stopPropagation()}
-        style={{ width: 460, maxWidth: '90vw' }}
+        style={{ width: 480, maxWidth: '90vw' }}
       >
         <div className="title" style={{ marginBottom: 12, justifyContent: 'space-between' }}>
           <span>确认导入基金</span>
@@ -44,19 +52,27 @@ export default function ScanImportConfirmModal({
             <CloseIcon width="20" height="20" />
           </button>
         </div>
+        {isOcrScan && (
+          <div className="ocr-warning" style={{ marginBottom: 12 }}>
+            <span>拍照识别方案目前还在优化，请确认识别结果是否正确。</span>
+          </div>
+        )}
         {scannedFunds.length === 0 ? (
           <div className="muted" style={{ fontSize: 13, lineHeight: 1.6 }}>
             未识别到有效的基金代码，请尝试更清晰的截图或手动搜索。
           </div>
         ) : (
           <>
-            <div className="search-results pending-list" style={{ maxHeight: 320, overflowY: 'auto' }}>
+            <div className="search-results pending-list" style={{ maxHeight: 360, overflowY: 'auto' }}>
               {scannedFunds.map((item) => {
                 const isSelected = selectedScannedCodes.has(item.code);
                 const isAlreadyAdded = item.status === 'added';
                 const isInvalid = item.status === 'invalid';
                 const isDisabled = isAlreadyAdded || isInvalid;
                 const displayName = item.name || (isInvalid ? '未找到基金' : '未知基金');
+                const holdAmounts = formatAmount(item.holdAmounts);
+                const holdGains = formatAmount(item.holdGains);
+                const hasHoldingData = holdAmounts !== null && holdGains !== null;
                 return (
                   <div
                     key={item.code}
@@ -66,19 +82,37 @@ export default function ScanImportConfirmModal({
                       if (isDisabled) return;
                       onToggle(item.code);
                     }}
-                    style={{ cursor: isDisabled ? 'not-allowed' : 'pointer' }}
+                    style={{ cursor: isDisabled ? 'not-allowed' : 'pointer', flexDirection: 'column', alignItems: 'stretch' }}
                   >
-                    <div className="fund-info">
-                      <span className="fund-name">{displayName}</span>
-                      <span className="fund-code muted">#{item.code}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div className="fund-info">
+                        <span className="fund-name">{displayName}</span>
+                        <span className="fund-code muted">#{item.code}</span>
+                      </div>
+                      {isAlreadyAdded ? (
+                        <span className="added-label">已添加</span>
+                      ) : isInvalid ? (
+                        <span className="added-label">未找到</span>
+                      ) : (
+                        <div className="checkbox">
+                          {isSelected && <div className="checked-mark" />}
+                        </div>
+                      )}
                     </div>
-                    {isAlreadyAdded ? (
-                      <span className="added-label">已添加</span>
-                    ) : isInvalid ? (
-                      <span className="added-label">未找到</span>
-                    ) : (
-                      <div className="checkbox">
-                        {isSelected && <div className="checked-mark" />}
+                    {hasHoldingData && !isDisabled && (
+                      <div style={{ display: 'flex', gap: 16, marginTop: 6, paddingLeft: 0 }}>
+                        {holdAmounts !== null && (
+                          <span className="muted" style={{ fontSize: 12 }}>
+                            持有金额：<span style={{ color: 'var(--text)', fontWeight: 500 }}>¥{holdAmounts.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          </span>
+                        )}
+                        {holdGains !== null && (
+                          <span className="muted" style={{ fontSize: 12 }}>
+                            持有收益：<span style={{ color: holdGains >= 0 ? 'var(--danger)' : 'var(--success)', fontWeight: 500 }}>
+                              {holdGains >= 0 ? '+' : '-'}¥{Math.abs(holdGains).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
