@@ -167,6 +167,8 @@ export default function HomePage() {
     { id: 'default', label: '默认', enabled: true },
     // 估值涨幅为原始名称，“涨跌幅”为别名
     { id: 'yield', label: '估值涨幅', alias: '涨跌幅', enabled: true },
+    // 昨日涨幅排序：默认隐藏
+    { id: 'yesterdayIncrease', label: '昨日涨幅', enabled: false },
     // 持仓金额排序：默认隐藏
     { id: 'holdingAmount', label: '持仓金额', enabled: false },
     { id: 'holding', label: '持有收益', enabled: true },
@@ -174,7 +176,7 @@ export default function HomePage() {
   ];
 
   // 排序状态
-  const [sortBy, setSortBy] = useState('default'); // default, name, yield, holding, holdingAmount
+  const [sortBy, setSortBy] = useState('default'); // default, name, yield, yesterdayIncrease, holding, holdingAmount
   const [sortOrder, setSortOrder] = useState('desc'); // asc | desc
   const [isSortLoaded, setIsSortLoaded] = useState(false);
   const [sortRules, setSortRules] = useState(DEFAULT_SORT_RULES);
@@ -685,6 +687,19 @@ export default function HomePage() {
           const amountA = pa?.amount ?? Number.NEGATIVE_INFINITY;
           const amountB = pb?.amount ?? Number.NEGATIVE_INFINITY;
           return sortOrder === 'asc' ? amountA - amountB : amountB - amountA;
+        }
+        if (sortBy === 'yesterdayIncrease') {
+          const valA = Number(a.zzl);
+          const valB = Number(b.zzl);
+          const hasA = Number.isFinite(valA);
+          const hasB = Number.isFinite(valB);
+
+          // 无昨日涨幅数据（界面展示为 `—`）的基金统一排在最后
+          if (!hasA && !hasB) return 0;
+          if (!hasA) return 1;
+          if (!hasB) return -1;
+
+          return sortOrder === 'asc' ? valA - valB : valB - valA;
         }
         if (sortBy === 'holding') {
           const pa = getHoldingProfit(a, holdings[a.code]);
