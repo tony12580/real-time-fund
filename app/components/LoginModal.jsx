@@ -101,7 +101,7 @@ export default function LoginModal({
           </div>
         </form>
 
-        {handleGithubLogin && (
+        {handleGithubLogin && !loginSuccess && (
           <>
             <div
               className="login-divider"
